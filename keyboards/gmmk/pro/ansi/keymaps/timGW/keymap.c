@@ -21,6 +21,12 @@ enum custom_layers {
     _FN1,
 };
 
+#ifdef RGB_MATRIX_ENABLE
+    #ifndef RGB_CONFIRMATION_BLINKING_TIME
+        #define RGB_CONFIRMATION_BLINKING_TIME 1000 // 1 second
+    #endif
+#endif // RGB_MATRIX_ENABLE
+
 // clang-format off
 const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 
@@ -58,10 +64,9 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     )
 };
 
-#ifdef ENCODER_ENABLE       // Rotary knob Functionality
-
+// Rotary knob Functionality
+#ifdef ENCODER_ENABLE
     bool encoder_update_user(uint8_t index, bool clockwise) {
-
 		switch(get_highest_layer(layer_state)) {
 			case _FN1:
 			if (clockwise) {
@@ -82,4 +87,212 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
 		}
         return true;
     }
-#endif
+#endif //ENCODER_ENABLE
+
+#ifdef RGB_MATRIX_ENABLE
+
+    /* Renaming those to make the purpose on this keymap clearer */
+    #define LED_FLAG_CAPS LED_FLAG_NONE
+    #define LED_FLAG_EFFECTS LED_FLAG_INDICATOR
+
+    static void set_rgb_caps_leds(void);
+
+    #if RGB_CONFIRMATION_BLINKING_TIME > 0
+    static uint16_t effect_started_time = 0;
+    static uint8_t r_effect = 0x0, g_effect = 0x0, b_effect = 0x0;
+    static void start_effects(void);
+
+    /* The higher this is, the slower the blinking will be */
+    #ifndef TIME_SELECTED_BIT
+        #define TIME_SELECTED_BIT 8
+    #endif
+    #if TIME_SELECTED_BIT < 0 || TIME_SELECTED_BIT >= 16
+        #error "TIME_SELECTED_BIT must be a positive integer smaller than 16"
+    #endif
+    #define effect_red() r_effect = 0xFF, g_effect = 0x0, b_effect = 0x0
+    #define effect_green() r_effect = 0x0, g_effect = 0xFF, b_effect = 0x0
+    #endif // RGB_CONFIRMATION_BLINKING_TIME > 0
+
+    bool led_update_user(led_t led_state) {
+        if (led_state.caps_lock) {
+            if (!rgb_matrix_is_enabled()) {
+                /* Turn ON the RGB Matrix for CAPS LOCK */
+                rgb_matrix_set_flags(LED_FLAG_CAPS);
+                rgb_matrix_enable();
+            }
+        } else if (rgb_matrix_get_flags() == LED_FLAG_CAPS) {
+            /* RGB Matrix was only ON because of CAPS LOCK. Turn it OFF. */
+            rgb_matrix_set_flags(LED_FLAG_ALL);
+            rgb_matrix_disable();
+        }
+        return true;
+    }
+
+    bool process_record_user(uint16_t keycode, keyrecord_t *record) {
+        switch (keycode) {
+        #ifdef NKRO_ENABLE
+        #if RGB_CONFIRMATION_BLINKING_TIME > 0
+            case NK_TOGG:
+                if (record->event.pressed) {
+                    if (keymap_config.nkro) {
+                        /* Turning NKRO OFF */
+                        effect_red();
+                    } else {
+                        /* Turning NKRO ON */
+                        effect_green();
+                    }
+                    start_effects();
+                }
+                break;
+            case NK_ON:
+                if (record->event.pressed) {
+                    if (!keymap_config.nkro) {
+                        /* Turning NKRO ON */
+                        effect_green();
+                        start_effects();
+                    }
+                }
+                break;
+            case NK_OFF:
+                if (record->event.pressed) {
+                    if (keymap_config.nkro) {
+                        /* Turning NKRO OFF */
+                        effect_red();
+                        start_effects();
+                    }
+                }
+                break;
+        #endif // RGB_CONFIRMATION_BLINKING_TIME > 0
+        #endif // NKRO_ENABLE
+            case RGB_MOD:
+            case RGB_RMOD:
+            case RGB_HUI:
+            case RGB_HUD:
+            case RGB_SAI:
+            case RGB_SAD:
+            case RGB_VAI:
+            case RGB_VAD:
+            case RGB_SPI:
+            case RGB_SPD:
+                if (record->event.pressed) {
+                    if (rgb_matrix_get_flags() != LED_FLAG_ALL) {
+                        /* Ignore changes to RGB settings while only it's supposed to be OFF */
+                        return false;
+                    }
+                }
+                break;
+            case RGB_TOG:
+                if (record->event.pressed) {
+                    if (rgb_matrix_is_enabled()) {
+                        switch (rgb_matrix_get_flags()) {
+                            #if RGB_CONFIRMATION_BLINKING_TIME > 0
+                            case LED_FLAG_EFFECTS:
+                            #endif
+                            case LED_FLAG_CAPS:
+                                /* Turned ON because of EFFECTS or CAPS, is actually OFF */
+                                /* Change to LED_FLAG_ALL to signal it's really ON */
+                                rgb_matrix_set_flags(LED_FLAG_ALL);
+                                /* Will be re-enabled by the processing of the toggle */
+                                rgb_matrix_disable_noeeprom();
+                                break;
+                            case LED_FLAG_ALL:
+                                /* Is actually ON */
+                                #if RGB_CONFIRMATION_BLINKING_TIME > 0
+                                if (effect_started_time > 0) {
+                                    /* Signal EFFECTS */
+                                    rgb_matrix_set_flags(LED_FLAG_EFFECTS);
+                                    /* Will be re-enabled by the processing of the toggle */
+                                    rgb_matrix_disable_noeeprom();
+                                } else
+                                #endif
+                                if (host_keyboard_led_state().caps_lock) {
+                                    /* Signal CAPS */
+                                    rgb_matrix_set_flags(LED_FLAG_CAPS);
+                                    /* Will be re-enabled by the processing of the toggle */
+                                    rgb_matrix_disable_noeeprom();
+                                }
+                                break;
+                        }
+                    }
+                }
+                break;
+        }
+        return true;
+    }
+
+    void rgb_matrix_indicators_user() {
+        #if RGB_CONFIRMATION_BLINKING_TIME > 0
+            if (effect_started_time > 0) {
+                /* Render blinking EFFECTS */
+                uint16_t deltaTime = sync_timer_elapsed(effect_started_time);
+                if (deltaTime <= RGB_CONFIRMATION_BLINKING_TIME) {
+                    uint8_t led_state = ((~deltaTime) >> TIME_SELECTED_BIT) & 0x01;
+                    uint8_t val_r = led_state * r_effect;
+                    uint8_t val_g = led_state * g_effect;
+                    uint8_t val_b = led_state * b_effect;
+                    rgb_matrix_set_color_all(val_r, val_g, val_b);
+                    if (host_keyboard_led_state().caps_lock) {
+                        set_rgb_caps_leds();
+                    }
+                    return;
+                } else {
+                    /* EFFECTS duration is finished */
+                    effect_started_time = 0;
+                    if (rgb_matrix_get_flags() == LED_FLAG_EFFECTS) {
+                        /* It was turned ON because of EFFECTS */
+                        if (host_keyboard_led_state().caps_lock) {
+                            /* CAPS is still ON. Demote to CAPS */
+                            rgb_matrix_set_flags(LED_FLAG_CAPS);
+                        } else {
+                            /* There is nothing else keeping RGB enabled. Reset flags and turn if off. */
+                            rgb_matrix_set_flags(LED_FLAG_ALL);
+                            rgb_matrix_disable_noeeprom();
+                        }
+                    }
+                }
+            }
+        #endif // RGB_CONFIRMATION_BLINKING_TIME > 0
+        if (rgb_matrix_get_flags() == LED_FLAG_CAPS) {
+            rgb_matrix_set_color_all(0x0, 0x0, 0x0);
+        }
+        if (host_keyboard_led_state().caps_lock) {
+            set_rgb_caps_leds();
+        }
+    }
+
+    #if RGB_CONFIRMATION_BLINKING_TIME > 0
+        static void start_effects() {
+            effect_started_time = sync_timer_read();
+            if (!rgb_matrix_is_enabled()) {
+                /* Turn it ON, signal the cause (EFFECTS) */
+                rgb_matrix_set_flags(LED_FLAG_EFFECTS);
+                rgb_matrix_enable_noeeprom();
+            } else if (rgb_matrix_get_flags() == LED_FLAG_CAPS) {
+                /* It's already ON, promote the cause from CAPS to EFFECTS */
+                rgb_matrix_set_flags(LED_FLAG_EFFECTS);
+            }
+        }
+    #endif // RGB_CONFIRMATION_BLINKING_TIME > 0
+
+    static void set_rgb_caps_leds() {
+        rgb_matrix_set_color(67, 0xFF, 0x0, 0x0); // Left side LED 1
+        rgb_matrix_set_color(68, 0xFF, 0x0, 0x0); // Right side LED 1
+        rgb_matrix_set_color(70, 0xFF, 0x0, 0x0); // Left side LED 2
+        rgb_matrix_set_color(71, 0xFF, 0x0, 0x0); // Right side LED 2
+        rgb_matrix_set_color(73, 0xFF, 0x0, 0x0); // Left side LED 3
+        rgb_matrix_set_color(74, 0xFF, 0x0, 0x0); // Right side LED 3
+        rgb_matrix_set_color(76, 0xFF, 0x0, 0x0); // Left side LED 4
+        rgb_matrix_set_color(77, 0xFF, 0x0, 0x0); // Right side LED 4
+        rgb_matrix_set_color(80, 0xFF, 0x0, 0x0); // Left side LED 5
+        rgb_matrix_set_color(81, 0xFF, 0x0, 0x0); // Right side LED 5
+        rgb_matrix_set_color(83, 0xFF, 0x0, 0x0); // Left side LED 6
+        rgb_matrix_set_color(84, 0xFF, 0x0, 0x0); // Right side LED 6
+        rgb_matrix_set_color(87, 0xFF, 0x0, 0x0); // Left side LED 7
+        rgb_matrix_set_color(88, 0xFF, 0x0, 0x0); // Right side LED 7
+        rgb_matrix_set_color(91, 0xFF, 0x0, 0x0); // Left side LED 8
+        rgb_matrix_set_color(92, 0xFF, 0x0, 0x0); // Right side LED 8
+        rgb_matrix_set_color(3, 0xFF, 0x0, 0x0); // CAPS LED
+        rgb_matrix_set_color(2, 0xFF, 0x0, 0x0); // CAPS TAB
+    }
+
+#endif // RGB_MATRIX_ENABLE
