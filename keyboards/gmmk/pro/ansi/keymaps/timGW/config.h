@@ -18,7 +18,6 @@
 
 #ifdef RGB_MATRIX_ENABLE
     #define RGB_MATRIX_STARTUP_MODE RGB_MATRIX_SOLID_COLOR
-    #define RGB_MATRIX_STARTUP_SAT 0 // set white color
     #define RGB_DISABLE_TIMEOUT (1000 * 60 * 10) // 10 minutes
     #define RGB_DISABLE_WHEN_USB_SUSPENDED
 #endif

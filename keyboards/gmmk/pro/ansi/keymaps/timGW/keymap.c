@@ -23,7 +23,7 @@ enum custom_layers {
 
 #ifdef RGB_MATRIX_ENABLE
     #ifndef RGB_CONFIRMATION_BLINKING_TIME
-        #define RGB_CONFIRMATION_BLINKING_TIME 1000 // 1 second
+        #define RGB_CONFIRMATION_BLINKING_TIME 2000 // 2 seconds
     #endif
 #endif // RGB_MATRIX_ENABLE
 
@@ -113,6 +113,13 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
     #define effect_green() r_effect = 0x0, g_effect = 0xFF, b_effect = 0x0
     #endif // RGB_CONFIRMATION_BLINKING_TIME > 0
 
+
+    /**
+    When the configuration options do not provide enough flexibility, the API hooks provided allow custom control of the LED behavior.
+    These functions will be called when the state of one of those 5 LEDs changes. It receives the LED state as a struct parameter.
+    By convention, return true from led_update_user() to get the led_update_kb() hook to run its code,
+    and return false when you would prefer not to run the code in led_update_kb().
+    */
     bool led_update_user(led_t led_state) {
         if (led_state.caps_lock) {
             if (!rgb_matrix_is_enabled()) {
@@ -128,6 +135,15 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         return true;
     }
 
+    /**
+    When you want to override the behavior of an existing key, or define the behavior for a new key,
+    you should use the process_record_kb() and process_record_user() functions.
+    These are called by QMK during key processing before the actual key event is handled.
+    If these functions return true QMK will process the keycodes as usual.
+    That can be handy for extending the functionality of a key rather than replacing it.
+    If these functions return false QMK will skip the normal key handling,
+    and it will be up to you to send any key up or down events that are required.
+    */
     bool process_record_user(uint16_t keycode, keyrecord_t *record) {
         switch (keycode) {
         #ifdef NKRO_ENABLE
@@ -220,6 +236,10 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
         return true;
     }
 
+    /** Callbacks:
+    If you want to set custom indicators, such as an LED for Caps Lock, or layer indication,
+    you can use the rgb_matrix_indicators_kb or rgb_matrix_indicators_user function for that
+    */
     void rgb_matrix_indicators_user() {
         #if RGB_CONFIRMATION_BLINKING_TIME > 0
             if (effect_started_time > 0) {
@@ -259,6 +279,31 @@ const uint16_t PROGMEM keymaps[][MATRIX_ROWS][MATRIX_COLS] = {
             set_rgb_caps_leds();
         }
     }
+
+    void rgb_matrix_indicators_advanced_user(uint8_t led_min, uint8_t led_max) {
+        if (get_highest_layer(layer_state) > 0) {
+            uint8_t layer = get_highest_layer(layer_state);
+
+            for (uint8_t row = 0; row < MATRIX_ROWS; ++row) {
+                for (uint8_t col = 0; col < MATRIX_COLS; ++col) {
+                    uint8_t index = g_led_config.matrix_co[row][col];
+
+                    if (index >= led_min && index <= led_max && index != NO_LED &&
+                    keymap_key_to_keycode(layer, (keypos_t){col,row}) > KC_TRNS) {
+                        rgb_matrix_set_color(index, RGB_GREEN);
+                    }
+                }
+            }
+        }
+    }
+
+     /**
+     This is ran as the very last task in the keyboard initialization process.
+     This is useful if you want to make changes to certain features, as they should be initialized by this point.
+     */
+     void keyboard_post_init_user(void) {
+         rgb_matrix_set_color_all(RGB_WHITE); // Default startup colour
+     }
 
     #if RGB_CONFIRMATION_BLINKING_TIME > 0
         static void start_effects() {
